@@ -33,7 +33,7 @@ def print(text, *args, **kw):
 # 通知服务
 # fmt: off
 push_config = {
-    'HITOKOTO': True,                  # 启用一言（随机句子）
+    'HITOKOTO': False,                  # 启用一言（随机句子）
 
     'BARK_PUSH': '',                    # bark IP 或设备码，例：https://api.day.app/DxHcxxxxxRxxxxxxcm/
     'BARK_ARCHIVE': '',                 # bark 推送是否存档
@@ -43,7 +43,7 @@ push_config = {
     'BARK_LEVEL': '',                   # bark 推送时效性
     'BARK_URL': '',                     # bark 推送跳转URL
 
-    'CONSOLE': False,                    # 控制台输出
+    'CONSOLE': False,                   # 控制台输出
 
     'DD_BOT_SECRET': '',                # 钉钉机器人的 DD_BOT_SECRET
     'DD_BOT_TOKEN': '',                 # 钉钉机器人的 DD_BOT_TOKEN
@@ -72,8 +72,17 @@ push_config = {
     'CHAT_URL': '',                     # synology chat url
     'CHAT_TOKEN': '',                   # synology chat token
 
-    'PUSH_PLUS_TOKEN': '',              # push+ 微信推送的用户令牌
-    'PUSH_PLUS_USER': '',               # push+ 微信推送的群组编码
+    'PUSH_PLUS_TOKEN': '',              # pushplus 推送的用户令牌
+    'PUSH_PLUS_USER': '',               # pushplus 推送的群组编码
+    'PUSH_PLUS_TEMPLATE': 'html',       # pushplus 发送模板，支持html,txt,json,markdown,cloudMonitor,jenkins,route,pay
+    'PUSH_PLUS_CHANNEL': 'wechat',      # pushplus 发送渠道，支持wechat,webhook,cp,mail,sms
+    'PUSH_PLUS_WEBHOOK': '',            # pushplus webhook编码，可在pushplus公众号上扩展配置出更多渠道
+    'PUSH_PLUS_CALLBACKURL': '',        # pushplus 发送结果回调地址，会把推送最终结果通知到这个地址上
+    'PUSH_PLUS_TO': '',                 # pushplus 好友令牌，微信公众号渠道填写好友令牌，企业微信渠道填写企业微信用户id
+
+    'WE_PLUS_BOT_TOKEN': '',            # 微加机器人的用户令牌
+    'WE_PLUS_BOT_RECEIVER': '',         # 微加机器人的消息接收者
+    'WE_PLUS_BOT_VERSION': 'pro',       # 微加机器人的调用版本
 
     'QMSG_KEY': '',                     # qmsg 酱的 QMSG_KEY
     'QMSG_TYPE': '',                    # qmsg 酱的 QMSG_TYPE
@@ -97,11 +106,14 @@ push_config = {
 
     'SMTP_SERVER': '',                  # SMTP 发送邮件服务器，形如 smtp.exmail.qq.com:465
     'SMTP_SSL': 'false',                # SMTP 发送邮件服务器是否使用 SSL，填写 true 或 false
-    'SMTP_EMAIL': '',                   # SMTP 收发件邮箱，通知将会由自己发给自己
+    'SMTP_EMAIL': '',                   # SMTP 发件邮箱
     'SMTP_PASSWORD': '',                # SMTP 登录密码，也可能为特殊口令，视具体邮件服务商说明而定
-    'SMTP_NAME': '',                    # SMTP 收发件人姓名，可随意填写
+    'SMTP_NAME': '',                    # SMTP 发件人姓名，可随意填写
+    'SMTP_EMAIL_TO': '',                # SMTP 收件邮箱，可选，缺省时将自己发给自己，多个收件邮箱逗号间隔
+    'SMTP_NAME_TO': '',                 # SMTP 收件人姓名，可选，可随意填写，多个收件人逗号间隔，顺序与 SMTP_EMAIL_TO 保持一致
 
-    'PUSHME_KEY': '',                   # PushMe 酱的 PUSHME_KEY
+    'PUSHME_KEY': '',                   # PushMe 的 PUSHME_KEY
+    'PUSHME_URL': '',                   # PushMe 的 PUSHME_URL
 
     'CHRONOCAT_QQ': '',                 # qq号
     'CHRONOCAT_TOKEN': '',              # CHRONOCAT 的token
@@ -111,11 +123,27 @@ push_config = {
     'WEBHOOK_BODY': '',                 # 自定义通知 请求体
     'WEBHOOK_HEADERS': '',              # 自定义通知 请求头
     'WEBHOOK_METHOD': '',               # 自定义通知 请求方法
-    'WEBHOOK_CONTENT_TYPE': ''          # 自定义通知 content-type
+    'WEBHOOK_CONTENT_TYPE': '',         # 自定义通知 content-type
+
+    'NTFY_URL': '',                     # ntfy地址,如https://ntfy.sh
+    'NTFY_TOPIC': '',                   # ntfy的消息应用topic
+    'NTFY_PRIORITY':'3',                # 推送消息优先级,默认为3
+    'NTFY_TOKEN': '',                   # 推送token,可选
+    'NTFY_USERNAME': '',                # 推送用户名称,可选
+    'NTFY_PASSWORD': '',                # 推送用户密码,可选
+    'NTFY_ACTIONS': '',                 # 推送用户动作,可选
+
+    'WXPUSHER_APP_TOKEN': '',           # wxpusher 的 appToken 官方文档: https://wxpusher.zjiecode.com/docs/ 管理后台: https://wxpusher.zjiecode.com/admin/
+    'WXPUSHER_TOPIC_IDS': '',           # wxpusher 的 主题ID，多个用英文分号;分隔 topic_ids 与 uids 至少配置一个才行
+    'WXPUSHER_UIDS': '',                # wxpusher 的 用户ID，多个用英文分号;分隔 topic_ids 与 uids 至少配置一个才行
+
+    'DODO_BOTTOKEN': '',                # DoDo机器人的token DoDo开发平台https://doker.imdodo.com/
+    'DODO_BOTID': '',                   # DoDo机器人的id
+    'DODO_LANDSOURCEID': '',            # DoDo机器人所在的群ID
+    'DODO_SOURCEID': '',                # DoDo机器人推送目标用户的ID
 }
 # fmt: on
 
-# 首先读取 面板变量 或者 github action 运行变量
 for k in push_config:
     if os.getenv(k):
         v = os.getenv(k)
@@ -127,14 +155,13 @@ def bark(title: str, content: str) -> None:
     使用 bark 推送消息。
     """
     if not push_config.get("BARK_PUSH"):
-        print("bark 服务的 BARK_PUSH 未设置!!\n取消推送")
         return
     print("bark 服务启动")
 
     if push_config.get("BARK_PUSH").startswith("http"):
-        url = f'{push_config.get("BARK_PUSH")}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
+        url = f'{push_config.get("BARK_PUSH")}'
     else:
-        url = f'https://api.day.app/{push_config.get("BARK_PUSH")}/{urllib.parse.quote_plus(title)}/{urllib.parse.quote_plus(content)}'
+        url = f'https://api.day.app/{push_config.get("BARK_PUSH")}'
 
     bark_params = {
         "BARK_ARCHIVE": "isArchive",
@@ -144,7 +171,10 @@ def bark(title: str, content: str) -> None:
         "BARK_LEVEL": "level",
         "BARK_URL": "url",
     }
-    params = ""
+    data = {
+        "title": title,
+        "body": content,
+    }
     for pair in filter(
         lambda pairs: pairs[0].startswith("BARK_")
         and pairs[0] != "BARK_PUSH"
@@ -152,10 +182,11 @@ def bark(title: str, content: str) -> None:
         and bark_params.get(pairs[0]),
         push_config.items(),
     ):
-        params += f"{bark_params.get(pair[0])}={pair[1]}&"
-    if params:
-        url = url + "?" + params.rstrip("&")
-    response = requests.get(url).json()
+        data[bark_params.get(pair[0])] = pair[1]
+    headers = {"Content-Type": "application/json;charset=utf-8"}
+    response = requests.post(
+        url=url, data=json.dumps(data), headers=headers, timeout=15
+    ).json()
 
     if response["code"] == 200:
         print("bark 推送成功！")
@@ -167,7 +198,8 @@ def console(title: str, content: str) -> None:
     """
     使用 控制台 推送消息。
     """
-    print(f"{title}\n\n{content}")
+    if str(push_config.get("CONSOLE")).lower() != "false":
+        print(f"{title}\n\n{content}")
 
 
 def dingding_bot(title: str, content: str) -> None:
@@ -175,7 +207,6 @@ def dingding_bot(title: str, content: str) -> None:
     使用 钉钉机器人 推送消息。
     """
     if not push_config.get("DD_BOT_SECRET") or not push_config.get("DD_BOT_TOKEN"):
-        print("钉钉机器人 服务的 DD_BOT_SECRET 或者 DD_BOT_TOKEN 未设置!!\n取消推送")
         return
     print("钉钉机器人 服务启动")
 
@@ -205,7 +236,6 @@ def feishu_bot(title: str, content: str) -> None:
     使用 飞书机器人 推送消息。
     """
     if not push_config.get("FSKEY"):
-        print("飞书 服务的 FSKEY 未设置!!\n取消推送")
         return
     print("飞书 服务启动")
 
@@ -224,7 +254,6 @@ def go_cqhttp(title: str, content: str) -> None:
     使用 go_cqhttp 推送消息。
     """
     if not push_config.get("GOBOT_URL") or not push_config.get("GOBOT_QQ"):
-        print("go-cqhttp 服务的 GOBOT_URL 或 GOBOT_QQ 未设置!!\n取消推送")
         return
     print("go-cqhttp 服务启动")
 
@@ -242,7 +271,6 @@ def gotify(title: str, content: str) -> None:
     使用 gotify 推送消息。
     """
     if not push_config.get("GOTIFY_URL") or not push_config.get("GOTIFY_TOKEN"):
-        print("gotify 服务的 GOTIFY_URL 或 GOTIFY_TOKEN 未设置!!\n取消推送")
         return
     print("gotify 服务启动")
 
@@ -265,7 +293,6 @@ def iGot(title: str, content: str) -> None:
     使用 iGot 推送消息。
     """
     if not push_config.get("IGOT_PUSH_KEY"):
-        print("iGot 服务的 IGOT_PUSH_KEY 未设置!!\n取消推送")
         return
     print("iGot 服务启动")
 
@@ -285,15 +312,18 @@ def serverJ(title: str, content: str) -> None:
     通过 serverJ 推送消息。
     """
     if not push_config.get("PUSH_KEY"):
-        print("serverJ 服务的 PUSH_KEY 未设置!!\n取消推送")
         return
     print("serverJ 服务启动")
 
     data = {"text": title, "desp": content.replace("\n", "\n\n")}
-    if push_config.get("PUSH_KEY").find("SCT") != -1:
-        url = f'https://sctapi.ftqq.com/{push_config.get("PUSH_KEY")}.send'
+
+    match = re.match(r"sctp(\d+)t", push_config.get("PUSH_KEY"))
+    if match:
+        num = match.group(1)
+        url = f'https://{num}.push.ft07.com/send/{push_config.get("PUSH_KEY")}.send'
     else:
-        url = f'https://sc.ftqq.com/{push_config.get("PUSH_KEY")}.send'
+        url = f'https://sctapi.ftqq.com/{push_config.get("PUSH_KEY")}.send'
+
     response = requests.post(url, data=data).json()
 
     if response.get("errno") == 0 or response.get("code") == 0:
@@ -307,7 +337,6 @@ def pushdeer(title: str, content: str) -> None:
     通过PushDeer 推送消息
     """
     if not push_config.get("DEER_KEY"):
-        print("PushDeer 服务的 DEER_KEY 未设置!!\n取消推送")
         return
     print("PushDeer 服务启动")
     data = {
@@ -333,7 +362,6 @@ def chat(title: str, content: str) -> None:
     通过Chat 推送消息
     """
     if not push_config.get("CHAT_URL") or not push_config.get("CHAT_TOKEN"):
-        print("chat 服务的 CHAT_URL或CHAT_TOKEN 未设置!!\n取消推送")
         return
     print("chat 服务启动")
     data = "payload=" + json.dumps({"text": title + "\n" + content})
@@ -348,26 +376,36 @@ def chat(title: str, content: str) -> None:
 
 def pushplus_bot(title: str, content: str) -> None:
     """
-    通过 push+ 推送消息。
+    通过 pushplus 推送消息。
     """
     if not push_config.get("PUSH_PLUS_TOKEN"):
-        print("PUSHPLUS 服务的 PUSH_PLUS_TOKEN 未设置!!\n取消推送")
         return
     print("PUSHPLUS 服务启动")
 
-    url = "http://www.pushplus.plus/send"
+    url = "https://www.pushplus.plus/send"
     data = {
         "token": push_config.get("PUSH_PLUS_TOKEN"),
         "title": title,
         "content": content,
         "topic": push_config.get("PUSH_PLUS_USER"),
+        "template": push_config.get("PUSH_PLUS_TEMPLATE"),
+        "channel": push_config.get("PUSH_PLUS_CHANNEL"),
+        "webhook": push_config.get("PUSH_PLUS_WEBHOOK"),
+        "callbackUrl": push_config.get("PUSH_PLUS_CALLBACKURL"),
+        "to": push_config.get("PUSH_PLUS_TO"),
     }
     body = json.dumps(data).encode(encoding="utf-8")
     headers = {"Content-Type": "application/json"}
     response = requests.post(url=url, data=body, headers=headers).json()
 
-    if response["code"] == 200:
-        print("PUSHPLUS 推送成功！")
+    code = response["code"]
+    if code == 200:
+        print("PUSHPLUS 推送请求成功，可根据流水号查询推送结果:" + response["data"])
+        print(
+            "注意：请求成功并不代表推送成功，如未收到消息，请到pushplus官网使用流水号查询推送最终结果"
+        )
+    elif code == 900 or code == 903 or code == 905 or code == 999:
+        print(response["msg"])
 
     else:
         url_old = "http://pushplus.hxtrip.com/send"
@@ -381,12 +419,42 @@ def pushplus_bot(title: str, content: str) -> None:
             print("PUSHPLUS 推送失败！")
 
 
+def weplus_bot(title: str, content: str) -> None:
+    """
+    通过 微加机器人 推送消息。
+    """
+    if not push_config.get("WE_PLUS_BOT_TOKEN"):
+        return
+    print("微加机器人 服务启动")
+
+    template = "txt"
+    if len(content) > 800:
+        template = "html"
+
+    url = "https://www.weplusbot.com/send"
+    data = {
+        "token": push_config.get("WE_PLUS_BOT_TOKEN"),
+        "title": title,
+        "content": content,
+        "template": template,
+        "receiver": push_config.get("WE_PLUS_BOT_RECEIVER"),
+        "version": push_config.get("WE_PLUS_BOT_VERSION"),
+    }
+    body = json.dumps(data).encode(encoding="utf-8")
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(url=url, data=body, headers=headers).json()
+
+    if response["code"] == 200:
+        print("微加机器人 推送成功！")
+    else:
+        print("微加机器人 推送失败！")
+
+
 def qmsg_bot(title: str, content: str) -> None:
     """
     使用 qmsg 推送消息。
     """
     if not push_config.get("QMSG_KEY") or not push_config.get("QMSG_TYPE"):
-        print("qmsg 的 QMSG_KEY 或者 QMSG_TYPE 未设置!!\n取消推送")
         return
     print("qmsg 服务启动")
 
@@ -405,11 +473,10 @@ def wecom_app(title: str, content: str) -> None:
     通过 企业微信 APP 推送消息。
     """
     if not push_config.get("QYWX_AM"):
-        print("QYWX_AM 未设置!!\n取消推送")
         return
     QYWX_AM_AY = re.split(",", push_config.get("QYWX_AM"))
     if 4 < len(QYWX_AM_AY) > 5:
-        print("QYWX_AM 设置错误!!\n取消推送")
+        print("QYWX_AM 设置错误!!")
         return
     print("企业微信 APP 服务启动")
 
@@ -502,7 +569,6 @@ def wecom_bot(title: str, content: str) -> None:
     通过 企业微信机器人 推送消息。
     """
     if not push_config.get("QYWX_KEY"):
-        print("企业微信机器人 服务的 QYWX_KEY 未设置!!\n取消推送")
         return
     print("企业微信机器人服务启动")
 
@@ -528,7 +594,6 @@ def telegram_bot(title: str, content: str) -> None:
     使用 telegram 机器人 推送消息。
     """
     if not push_config.get("TG_BOT_TOKEN") or not push_config.get("TG_USER_ID"):
-        print("tg 服务的 bot_token 或者 user_id 未设置!!\n取消推送")
         return
     print("tg 服务启动")
 
@@ -577,9 +642,6 @@ def aibotk(title: str, content: str) -> None:
         or not push_config.get("AIBOTK_TYPE")
         or not push_config.get("AIBOTK_NAME")
     ):
-        print(
-            "智能微秘书 的 AIBOTK_KEY 或者 AIBOTK_TYPE 或者 AIBOTK_NAME 未设置!!\n取消推送"
-        )
         return
     print("智能微秘书 服务启动")
 
@@ -618,9 +680,6 @@ def smtp(title: str, content: str) -> None:
         or not push_config.get("SMTP_PASSWORD")
         or not push_config.get("SMTP_NAME")
     ):
-        print(
-            "SMTP 邮件 的 SMTP_SERVER 或者 SMTP_SSL 或者 SMTP_EMAIL 或者 SMTP_PASSWORD 或者 SMTP_NAME 未设置!!\n取消推送"
-        )
         return
     print("SMTP 邮件 服务启动")
 
@@ -631,12 +690,23 @@ def smtp(title: str, content: str) -> None:
             push_config.get("SMTP_EMAIL"),
         )
     )
-    message["To"] = formataddr(
-        (
-            Header(push_config.get("SMTP_NAME"), "utf-8").encode(),
-            push_config.get("SMTP_EMAIL"),
+    if  not push_config.get("SMTP_EMAIL_TO"):
+        smtp_email_to = push_config.get("SMTP_EMAIL")
+        message["To"] = formataddr(
+            (
+                Header(push_config.get("SMTP_NAME"), "utf-8").encode(),
+                push_config.get("SMTP_EMAIL"),
+            )
         )
-    )
+    else:
+        smtp_email_to = push_config.get("SMTP_EMAIL_TO").split(",")
+        smtp_name_to = push_config.get("SMTP_NAME_TO","").split(",")
+        message["To"] = ",".join([formataddr(
+            (
+                Header(smtp_name_to[i] if len(smtp_name_to) > i else "", "utf-8").encode(),
+                email_to,
+            )
+        ) for i, email_to in enumerate(smtp_email_to)])
     message["Subject"] = Header(title, "utf-8")
 
     try:
@@ -650,7 +720,7 @@ def smtp(title: str, content: str) -> None:
         )
         smtp_server.sendmail(
             push_config.get("SMTP_EMAIL"),
-            push_config.get("SMTP_EMAIL"),
+            smtp_email_to,
             message.as_bytes(),
         )
         smtp_server.close()
@@ -664,14 +734,20 @@ def pushme(title: str, content: str) -> None:
     使用 PushMe 推送消息。
     """
     if not push_config.get("PUSHME_KEY"):
-        print("PushMe 服务的 PUSHME_KEY 未设置!!\n取消推送")
         return
     print("PushMe 服务启动")
 
-    url = f'https://push.i-i.me/?push_key={push_config.get("PUSHME_KEY")}'
+    url = (
+        push_config.get("PUSHME_URL")
+        if push_config.get("PUSHME_URL")
+        else "https://push.i-i.me/"
+    )
     data = {
+        "push_key": push_config.get("PUSHME_KEY"),
         "title": title,
         "content": content,
+        "date": push_config.get("date") if push_config.get("date") else "",
+        "type": push_config.get("type") if push_config.get("type") else "",
     }
     response = requests.post(url, data=data)
 
@@ -690,7 +766,6 @@ def chronocat(title: str, content: str) -> None:
         or not push_config.get("CHRONOCAT_QQ")
         or not push_config.get("CHRONOCAT_TOKEN")
     ):
-        print("CHRONOCAT 服务的 CHRONOCAT_URL 或 CHRONOCAT_QQ 未设置!!\n取消推送")
         return
 
     print("CHRONOCAT 服务启动")
@@ -728,6 +803,151 @@ def chronocat(title: str, content: str) -> None:
                     print(f"QQ个人消息:{ids}推送失败！")
                 else:
                     print(f"QQ群消息:{ids}推送失败！")
+
+
+def ntfy(title: str, content: str) -> None:
+    """
+    通过 Ntfy 推送消息
+    """
+
+    def encode_rfc2047(text: str) -> str:
+        """将文本编码为符合 RFC 2047 标准的格式"""
+        encoded_bytes = base64.b64encode(text.encode("utf-8"))
+        encoded_str = encoded_bytes.decode("utf-8")
+        return f"=?utf-8?B?{encoded_str}?="
+
+    if not push_config.get("NTFY_TOPIC"):
+        return
+    print("ntfy 服务启动")
+    priority = "3"
+    if not push_config.get("NTFY_PRIORITY"):
+        print("ntfy 服务的NTFY_PRIORITY 未设置!!默认设置为3")
+    else:
+        priority = push_config.get("NTFY_PRIORITY")
+
+    # 使用 RFC 2047 编码 title
+    encoded_title = encode_rfc2047(title)
+
+    data = content.encode(encoding="utf-8")
+    headers = {"Title": encoded_title, "Priority": priority, "Icon": "https://qn.whyour.cn/logo.png"}  # 使用编码后的 title
+    if push_config.get("NTFY_TOKEN"):
+        headers['Authorization'] = "Bearer " + push_config.get("NTFY_TOKEN")
+    elif push_config.get("NTFY_USERNAME") and push_config.get("NTFY_PASSWORD"):
+        authStr = push_config.get("NTFY_USERNAME") + ":" + push_config.get("NTFY_PASSWORD")
+        headers['Authorization'] = "Basic " + base64.b64encode(authStr.encode('utf-8')).decode('utf-8')
+    if push_config.get("NTFY_ACTIONS"):
+        headers['Actions'] = encode_rfc2047(push_config.get("NTFY_ACTIONS"))
+
+    url = push_config.get("NTFY_URL") + "/" + push_config.get("NTFY_TOPIC")
+    response = requests.post(url, data=data, headers=headers)
+    if response.status_code == 200:  # 使用 response.status_code 进行检查
+        print("Ntfy 推送成功！")
+    else:
+        print("Ntfy 推送失败！错误信息：", response.text)
+
+def dodo_bot(title: str, content: str) -> None:
+    """
+    通过 DoDo机器人 推送消息
+    """
+    required_keys = [
+        'DODO_BOTTOKEN',
+        'DODO_BOTID',
+        'DODO_LANDSOURCEID',
+        'DODO_SOURCEID'
+    ]
+    if not all(push_config.get(key) for key in required_keys):
+        missing = [key for key in required_keys if not push_config.get(key)]
+        print(f"DoDo 服务配置不完整，缺少以下参数: {', '.join(missing)}\n取消推送")
+        return
+    print("DoDo 服务启动")
+    url="https://botopen.imdodo.com/api/v2/personal/message/send"
+
+    botID=push_config.get('DODO_BOTID')
+    botToken=push_config.get('DODO_BOTTOKEN')
+    islandSourceId=push_config.get('DODO_LANDSOURCEID')
+    dodoSourceId=push_config.get('DODO_SOURCEID')
+
+    headers = {
+        'Authorization': f'Bot {botID}.{botToken}',
+        'Content-Type': 'application/json',
+        'Host': 'botopen.imdodo.com'
+    }
+    payload = json.dumps({
+        "islandSourceId": islandSourceId,
+        "dodoSourceId": dodoSourceId,
+        "messageType": 1,
+        "messageBody": {
+            "content": f"{title}\n\n{content}"
+        }
+    })
+
+    try:
+        response = requests.post(url, headers=headers, data=payload)
+        if response.status_code == 200:
+            response = response.json()
+            if response.get("status") == 0 and response.get("message") == "success":
+                print(f'DoDo 推送成功！')
+            else:
+                print(f'DoDo 推送失败！错误信息：\n{response}')
+        else:
+            print("DoDo 推送失败！错误信息：", response.text)
+    except Exception as e:
+        print(f"DoDo 推送请求异常: {str(e)}")
+
+def wxpusher_bot(title: str, content: str) -> None:
+    """
+    通过 wxpusher 推送消息。
+    支持的环境变量:
+    - WXPUSHER_APP_TOKEN: appToken
+    - WXPUSHER_TOPIC_IDS: 主题ID, 多个用英文分号;分隔
+    - WXPUSHER_UIDS: 用户ID, 多个用英文分号;分隔
+    """
+    if not push_config.get("WXPUSHER_APP_TOKEN"):
+        return
+
+    url = "https://wxpusher.zjiecode.com/api/send/message"
+
+    # 处理topic_ids和uids，将分号分隔的字符串转为数组
+    topic_ids = []
+    if push_config.get("WXPUSHER_TOPIC_IDS"):
+        topic_ids = [
+            int(id.strip())
+            for id in push_config.get("WXPUSHER_TOPIC_IDS").split(";")
+            if id.strip()
+        ]
+
+    uids = []
+    if push_config.get("WXPUSHER_UIDS"):
+        uids = [
+            uid.strip()
+            for uid in push_config.get("WXPUSHER_UIDS").split(";")
+            if uid.strip()
+        ]
+
+    # topic_ids uids 至少有一个
+    if not topic_ids and not uids:
+        print("wxpusher 服务的 WXPUSHER_TOPIC_IDS 和 WXPUSHER_UIDS 至少设置一个!!")
+        return
+
+    print("wxpusher 服务启动")
+
+    data = {
+        "appToken": push_config.get("WXPUSHER_APP_TOKEN"),
+        "content": f"<h1>{title}</h1><br/><div style='white-space: pre-wrap;'>{content}</div>",
+        "summary": title,
+        "contentType": 2,
+        "topicIds": topic_ids,
+        "uids": uids,
+        "verifyPayType": 0,
+    }
+
+    headers = {"Content-Type": "application/json"}
+    response = requests.post(url=url, json=data, headers=headers).json()
+
+    if response.get("code") == 1000:
+        print("wxpusher 推送成功！")
+    else:
+        print(f"wxpusher 推送失败！错误信息：{response.get('msg')}")
 
 
 def parse_headers(headers):
@@ -786,7 +1006,6 @@ def custom_notify(title: str, content: str) -> None:
     通过 自定义通知 推送消息。
     """
     if not push_config.get("WEBHOOK_URL") or not push_config.get("WEBHOOK_METHOD"):
-        print("自定义通知的 WEBHOOK_URL 或 WEBHOOK_METHOD 未设置!!\n取消推送")
         return
 
     print("自定义通知服务启动")
@@ -805,7 +1024,9 @@ def custom_notify(title: str, content: str) -> None:
     body = parse_body(
         WEBHOOK_BODY,
         WEBHOOK_CONTENT_TYPE,
-        lambda v: v.replace("$title", title).replace("$content", content),
+        lambda v: v.replace("$title", title.replace("\n", "\\n")).replace(
+            "$content", content.replace("\n", "\\n")
+        ),
     )
     formatted_url = WEBHOOK_URL.replace(
         "$title", urllib.parse.quote_plus(title)
@@ -854,6 +1075,8 @@ def add_notify_function():
         notify_function.append(chat)
     if push_config.get("PUSH_PLUS_TOKEN"):
         notify_function.append(pushplus_bot)
+    if push_config.get("WE_PLUS_BOT_TOKEN"):
+        notify_function.append(weplus_bot)
     if push_config.get("QMSG_KEY") and push_config.get("QMSG_TYPE"):
         notify_function.append(qmsg_bot)
     if push_config.get("QYWX_AM"):
@@ -884,9 +1107,21 @@ def add_notify_function():
         and push_config.get("CHRONOCAT_TOKEN")
     ):
         notify_function.append(chronocat)
+    if (
+        push_config.get("DODO_BOTTOKEN")
+        and push_config.get("DODO_BOTID")
+        and push_config.get("DODO_LANDSOURCEID")
+        and push_config.get("DODO_SOURCEID")
+    ):
+        notify_function.append(dodo_bot)
     if push_config.get("WEBHOOK_URL") and push_config.get("WEBHOOK_METHOD"):
         notify_function.append(custom_notify)
-
+    if push_config.get("NTFY_TOPIC"):
+        notify_function.append(ntfy)
+    if push_config.get("WXPUSHER_APP_TOKEN") and (
+        push_config.get("WXPUSHER_TOPIC_IDS") or push_config.get("WXPUSHER_UIDS")
+    ):
+        notify_function.append(wxpusher_bot)
     if not notify_function:
         print(f"无推送渠道，请检查通知变量是否正确")
     return notify_function
@@ -912,7 +1147,8 @@ def send(title: str, content: str, ignore_default_config: bool = False, **kwargs
             return
 
     hitokoto = push_config.get("HITOKOTO")
-    content += "\n\n" + one() if hitokoto else ""
+    if hitokoto and str(hitokoto).lower() != "false":
+        content += "\n\n" + one()
 
     notify_function = add_notify_function()
     ts = [

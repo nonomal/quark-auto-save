@@ -1,6 +1,6 @@
 # !/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Modify: 2024-04-03
+# Modify: 2026-02-04
 # Repo: https://github.com/Cp0204/quark_auto_save
 # ConfigFile: quark_config.json
 """
@@ -13,8 +13,13 @@ import sys
 import json
 import time
 import random
+import platform
 import requests
+import importlib
+import traceback
+import urllib.parse
 from datetime import datetime
+from natsort import natsorted
 
 # 兼容青龙
 try:
@@ -30,24 +35,6 @@ NOTIFYS = []
 GH_PROXY = os.environ.get("GH_PROXY", "https://ghproxy.net/")
 
 
-MAGIC_REGEX = {
-    "$TV": {
-        "pattern": ".*?(S\\d{1,2}E)?P?(\\d{1,3}).*?\\.(mp4|mkv)",
-        "replace": "\\1\\2.\\3",
-    },
-}
-
-
-# 魔法正则匹配
-def magic_regex_func(pattern, replace):
-    keyword = pattern
-    if keyword in CONFIG_DATA["magic_regex"]:
-        pattern = CONFIG_DATA["magic_regex"][keyword]["pattern"]
-        if replace == "":
-            replace = CONFIG_DATA["magic_regex"][keyword]["replace"]
-    return pattern, replace
-
-
 # 发送通知消息
 def send_ql_notify(title, body):
     try:
@@ -56,8 +43,8 @@ def send_ql_notify(title, body):
 
         # 如未配置 push_config 则使用青龙环境通知设置
         if CONFIG_DATA.get("push_config"):
-            CONFIG_DATA["push_config"]["CONSOLE"] = True
-            notify.push_config = CONFIG_DATA["push_config"]
+            notify.push_config.update(CONFIG_DATA["push_config"])
+            notify.push_config["CONSOLE"] = notify.push_config.get("CONSOLE", True)
         notify.send(title, body)
     except Exception as e:
         if e:
@@ -72,51 +59,379 @@ def add_notify(text):
     return text
 
 
-# 下载配置
-def download_file(url, save_path):
-    response = requests.get(url)
-    if response.status_code == 200:
-        with open(save_path, "wb") as file:
-            file.write(response.content)
-        return True
-    else:
-        return False
-
-
-# 读取CK
-def get_cookies(cookie_val):
-    if isinstance(cookie_val, list):
-        return cookie_val
-    elif cookie_val:
-        if "\n" in cookie_val:
-            return cookie_val.split("\n")
+class Config:
+    # 下载配置
+    def download_file(url, save_path):
+        response = requests.get(url)
+        if response.status_code == 200:
+            with open(save_path, "wb") as file:
+                file.write(response.content)
+            return True
         else:
-            return [cookie_val]
-    else:
-        return False
+            return False
+
+    # 读取 JSON 文件内容
+    def read_json(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data
+
+    # 将数据写入 JSON 文件
+    def write_json(config_path, data):
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, sort_keys=False, indent=2)
+
+    # 读取CK
+    def get_cookies(cookie_val):
+        if isinstance(cookie_val, list):
+            return cookie_val
+        elif cookie_val:
+            if "\n" in cookie_val:
+                return cookie_val.split("\n")
+            else:
+                return [cookie_val]
+        else:
+            return False
+
+    def load_plugins(plugins_config={}, plugins_dir="plugins"):
+        PLUGIN_FLAGS = os.environ.get("PLUGIN_FLAGS", "").split(",")
+        plugins_available = {}
+        task_plugins_config = {}
+        # 获取所有模块
+        sys_ext = "pyd" if platform.system() == "Windows" else "so"
+        module_ext = [".py", f".{sys_ext}"]
+        all_modules = [
+            f.replace(ext, "")
+            for f in os.listdir(plugins_dir)
+            for ext in module_ext
+            if f.endswith(ext)
+        ]
+        # 调整模块优先级
+        priority_path = os.path.join(plugins_dir, "_priority.json")
+        try:
+            with open(priority_path, encoding="utf-8") as f:
+                priority_modules = json.load(f)
+        except (FileNotFoundError, json.JSONDecodeError):
+            priority_modules = []
+        if priority_modules:
+            all_modules = [
+                module for module in priority_modules if module in all_modules
+            ] + [module for module in all_modules if module not in priority_modules]
+        # 加载模块
+        for module_name in all_modules:
+            if f"-{module_name}" in PLUGIN_FLAGS:
+                continue
+            try:
+                module = importlib.import_module(f"{plugins_dir}.{module_name}")
+                ServerClass = getattr(module, module_name.capitalize())
+                # 检查配置中是否存在该模块的配置
+                if module_name in plugins_config:
+                    plugin = ServerClass(**plugins_config[module_name])
+                    plugins_available[module_name] = plugin
+                else:
+                    plugin = ServerClass()
+                    plugins_config[module_name] = plugin.default_config
+                # 检查插件是否支持单独任务配置
+                if hasattr(plugin, "default_task_config"):
+                    task_plugins_config[module_name] = plugin.default_task_config
+            except (ImportError, AttributeError) as e:
+                print(f"载入模块 {module_name} 失败: {e}")
+        return plugins_available, plugins_config, task_plugins_config
+
+    def breaking_change_update(config_data):
+        # 🔼 Update config v0.5.x to 0.6.0
+        for task in config_data.get("tasklist", []):
+            if "$TASKNAME" in task.get("replace", ""):
+                task["replace"] = task["replace"].replace("$TASKNAME", "{TASKNAME}")
+
+
+class MagicRename:
+
+    magic_regex = {
+        "$TV": {
+            "pattern": r".*?([Ss]\d{1,2})?(?:[第EePpXx\.\-\_\( ]{1,2}|^)(\d{1,3})(?!\d).*?\.(mp4|mkv)",
+            "replace": r"\1E\2.\3",
+        },
+        "$BLACK_WORD": {
+            "pattern": r"^(?!.*纯享)(?!.*加更)(?!.*超前企划)(?!.*训练室)(?!.*蒸蒸日上).*",
+            "replace": "",
+        },
+    }
+
+    magic_variable = {
+        "{TASKNAME}": "",
+        "{I}": 1,
+        "{EXT}": [r"(?<=\.)\w+$"],
+        "{CHINESE}": [r"[\u4e00-\u9fa5]{2,}"],
+        "{DATE}": [
+            r"(18|19|20)?\d{2}[\.\-/年]\d{1,2}[\.\-/月]\d{1,2}",
+            r"(?<!\d)[12]\d{3}[01]?\d[0123]?\d",
+            r"(?<!\d)[01]?\d[\.\-/月][0123]?\d",
+        ],
+        "{YEAR}": [r"(?<!\d)(18|19|20)\d{2}(?!\d)"],
+        "{S}": [r"(?<=[Ss])\d{1,2}(?=[EeXx])", r"(?<=[Ss])\d{1,2}"],
+        "{SXX}": [r"[Ss]\d{1,2}(?=[EeXx])", r"[Ss]\d{1,2}"],
+        "{E}": [
+            r"(?<=[Ss]\d\d[Ee])\d{1,3}",
+            r"(?<=[Ee])\d{1,3}",
+            r"(?<=[Ee][Pp])\d{1,3}",
+            r"(?<=第)\d{1,3}(?=[集期话部篇])",
+            r"(?<!\d)\d{1,3}(?=[集期话部篇])",
+            r"(?!.*19)(?!.*20)(?<=[\._])\d{1,3}(?=[\._])",
+            r"^\d{1,3}(?=\.\w+)",
+            r"(?<!\d)\d{1,3}(?!\d)(?!$)",
+        ],
+        "{PART}": [
+            r"(?<=[集期话部篇第])[上中下一二三四五六七八九十]",
+            r"[上中下一二三四五六七八九十]",
+        ],
+        "{VER}": [r"[\u4e00-\u9fa5]+版"],
+    }
+
+    priority_list = [
+        "上",
+        "中",
+        "下",
+        "一",
+        "二",
+        "三",
+        "四",
+        "五",
+        "六",
+        "七",
+        "八",
+        "九",
+        "十",
+        "百",
+        "千",
+        "万",
+    ]
+
+    def __init__(self, magic_regex={}, magic_variable={}):
+        self.magic_regex.update(magic_regex)
+        self.magic_variable.update(magic_variable)
+        self.dir_filename_dict = {}
+
+    def set_taskname(self, taskname):
+        """设置任务名称"""
+        self.magic_variable["{TASKNAME}"] = taskname
+
+    def magic_regex_conv(self, pattern, replace):
+        """魔法正则匹配"""
+        keyword = pattern
+        if keyword in self.magic_regex:
+            pattern = self.magic_regex[keyword]["pattern"]
+            if replace == "":
+                replace = self.magic_regex[keyword]["replace"]
+        return pattern, replace
+
+    def sub(self, pattern, replace, file_name):
+        """魔法正则、变量替换"""
+        if not replace:
+            return file_name
+        # 预处理替换变量
+        for key, p_list in self.magic_variable.items():
+            if key in replace:
+                # 正则类替换变量
+                if p_list and isinstance(p_list, list):
+                    for p in p_list:
+                        match = re.search(p, file_name)
+                        if match:
+                            # 匹配成功，替换为匹配到的值
+                            value = match.group()
+                            # 日期格式处理：补全、格式化
+                            if key == "{DATE}":
+                                value = "".join(
+                                    [char for char in value if char.isdigit()]
+                                )
+                                value = (
+                                    str(datetime.now().year)[: (8 - len(value))] + value
+                                )
+                            replace = replace.replace(key, value)
+                            break
+                # 非正则类替换变量
+                if key == "{TASKNAME}":
+                    replace = replace.replace(key, self.magic_variable["{TASKNAME}"])
+                elif key == "{SXX}" and not match:
+                    replace = replace.replace(key, "S01")
+                elif key == "{I}":
+                    continue
+                else:
+                    # 清理未匹配的 magic_variable key
+                    replace = replace.replace(key, "")
+        if pattern and replace:
+            file_name = re.sub(pattern, replace, file_name)
+        else:
+            file_name = replace
+        return file_name
+
+    def _custom_sort_key(self, name):
+        """自定义排序键"""
+        for i, keyword in enumerate(self.priority_list):
+            if keyword in name:
+                name = name.replace(keyword, f"_{i:02d}_")  # 替换为数字，方便排序
+        return name
+
+    def sort_file_list(self, file_list, dir_filename_dict={}):
+        """文件列表统一排序，给{I+}赋值"""
+        filename_list = [
+            # 强制加入`文件修改时间`字段供排序，效果：1无可排序字符时则按修改时间排序，2和目录已有文件重名时始终在其后
+            f"{f['file_name_re']}_{f['updated_at']}"
+            for f in file_list
+            if f.get("file_name_re") and not f["dir"]
+        ]
+        # print(f"filename_list_before: {filename_list}")
+        dir_filename_dict = dir_filename_dict or self.dir_filename_dict
+        # print(f"dir_filename_list: {dir_filename_list}")
+        # 合并目录文件列表
+        filename_list = list(set(filename_list) | set(dir_filename_dict.values()))
+        filename_list = natsorted(filename_list, key=self._custom_sort_key)
+        filename_index = {}
+        for name in filename_list:
+            if name in dir_filename_dict.values():
+                continue
+            i = filename_list.index(name) + 1
+            while i in dir_filename_dict.keys():
+                i += 1
+            dir_filename_dict[i] = name
+            filename_index[name] = i
+        for file in file_list:
+            if file.get("file_name_re"):
+                if match := re.search(r"\{I+\}", file["file_name_re"]):
+                    i = filename_index.get(
+                        f"{file['file_name_re']}_{file['updated_at']}", 0
+                    )
+                    file["file_name_re"] = re.sub(
+                        match.group(),
+                        str(i).zfill(match.group().count("I")),
+                        file["file_name_re"],
+                    )
+
+    def set_dir_file_list(self, file_list, replace):
+        """设置目录文件列表"""
+        self.dir_filename_dict = {}
+        filename_list = [f["file_name"] for f in file_list if not f["dir"]]
+        filename_list.sort()
+        if not filename_list:
+            return
+        if match := re.search(r"\{I+\}", replace):
+            # 由替换式转换匹配式
+            magic_i = match.group()
+            pattern_i = r"\d" * magic_i.count("I")
+            pattern = replace.replace(match.group(), "🔢")
+            for key, _ in self.magic_variable.items():
+                if key in pattern:
+                    pattern = pattern.replace(key, "🔣")
+            pattern = re.sub(r"\\[0-9]+", "🔣", pattern)  # \1 \2 \3
+            pattern = f"({re.escape(pattern).replace('🔣', '.*?').replace('🔢', f')({pattern_i})(')})"
+            # print(f"pattern: {pattern}")
+            # 获取起始编号
+            if match := re.match(pattern, filename_list[-1]):
+                self.magic_variable["{I}"] = int(match.group(2))
+            # 目录文件列表
+            for filename in filename_list:
+                if match := re.match(pattern, filename):
+                    self.dir_filename_dict[int(match.group(2))] = (
+                        match.group(1) + magic_i + match.group(3)
+                    )
+            # print(f"filename_list: {self.filename_list}")
+
+    def is_exists(self, filename, filename_list, ignore_ext=False):
+        """判断文件是否存在，处理忽略扩展名"""
+        # print(f"filename: {filename} filename_list: {filename_list}")
+        if ignore_ext:
+            filename = os.path.splitext(filename)[0]
+            filename_list = [os.path.splitext(f)[0] for f in filename_list]
+        # {I+} 模式，用I通配数字序号
+        if match := re.search(r"\{I+\}", filename):
+            magic_i = match.group()
+            pattern_i = r"\d" * magic_i.count("I")
+            pattern = re.escape(filename).replace(re.escape(magic_i), pattern_i)
+            for filename in filename_list:
+                if re.match(pattern, filename):
+                    return filename
+            return None
+        else:
+            return filename if filename in filename_list else None
 
 
 class Quark:
-    def __init__(self, cookie, index=None):
+    BASE_URL = "https://drive-pc.quark.cn"
+    BASE_URL_APP = "https://drive-m.quark.cn"
+    USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) quark-cloud-drive/3.14.2 Chrome/112.0.5615.165 Electron/24.1.3.8 Safari/537.36 Channel/pckk_other_ch"
+
+    def __init__(self, cookie="", index=0):
         self.cookie = cookie.strip()
         self.index = index + 1
         self.is_active = False
         self.nickname = ""
-        self.st = self.match_st_form_cookie(cookie)
+        self.mparam = self._match_mparam_form_cookie(cookie)
         self.savepath_fid = {"/": "0"}
 
-    def match_st_form_cookie(self, cookie):
-        match = re.search(r"=(st[a-zA-Z0-9]+);", cookie)
-        return match.group(1) if match else False
+    def _match_mparam_form_cookie(self, cookie):
+        mparam = {}
+        kps_match = re.search(r"(?<!\w)kps=([a-zA-Z0-9%+/=]+)[;&]?", cookie)
+        sign_match = re.search(r"(?<!\w)sign=([a-zA-Z0-9%+/=]+)[;&]?", cookie)
+        vcode_match = re.search(r"(?<!\w)vcode=([a-zA-Z0-9%+/=]+)[;&]?", cookie)
+        if kps_match and sign_match and vcode_match:
+            mparam = {
+                "kps": kps_match.group(1).replace("%25", "%"),
+                "sign": sign_match.group(1).replace("%25", "%"),
+                "vcode": vcode_match.group(1).replace("%25", "%"),
+            }
+        return mparam
 
-    def common_headers(self):
+    def _send_request(self, method, url, **kwargs):
         headers = {
             "cookie": self.cookie,
             "content-type": "application/json",
+            "user-agent": self.USER_AGENT,
         }
-        if self.st:
-            headers["x-clouddrive-st"] = self.st
-        return headers
+        if "headers" in kwargs:
+            headers = kwargs["headers"]
+            del kwargs["headers"]
+        if self.mparam and "share" in url and self.BASE_URL in url:
+            url = url.replace(self.BASE_URL, self.BASE_URL_APP)
+            kwargs["params"].update(
+                {
+                    "device_model": "M2011K2C",
+                    "entry": "default_clouddrive",
+                    "_t_group": "0%3A_s_vp%3A1",
+                    "dmn": "Mi%2B11",
+                    "fr": "android",
+                    "pf": "3300",
+                    "bi": "35937",
+                    "ve": "7.4.5.680",
+                    "ss": "411x875",
+                    "mi": "M2011K2C",
+                    "nt": "5",
+                    "nw": "0",
+                    "kt": "4",
+                    "pr": "ucpro",
+                    "sv": "release",
+                    "dt": "phone",
+                    "data_from": "ucapi",
+                    "kps": self.mparam.get("kps"),
+                    "sign": self.mparam.get("sign"),
+                    "vcode": self.mparam.get("vcode"),
+                    "app": "clouddrive",
+                    "kkkk": "1",
+                }
+            )
+            del headers["cookie"]
+        try:
+            response = requests.request(method, url, headers=headers, **kwargs)
+            # print(f"{response.text}")
+            # response.raise_for_status()  # 检查请求是否成功，但返回非200也会抛出异常
+            return response
+        except Exception as e:
+            print(f"_send_request error:\n{e}")
+            fake_response = requests.Response()
+            fake_response.status_code = 500
+            fake_response._content = (
+                b'{"status": 500, "code": 1, "message": "request error"}'
+            )
+            return fake_response
 
     def init(self):
         account_info = self.get_account_info()
@@ -130,26 +445,25 @@ class Quark:
     def get_account_info(self):
         url = "https://pan.quark.cn/account/info"
         querystring = {"fr": "pc", "platform": "pc"}
-        headers = {
-            "cookie": self.cookie,
-            "content-type": "application/json",
-        }
-        response = requests.request(
-            "GET", url, headers=headers, params=querystring
-        ).json()
+        response = self._send_request("GET", url, params=querystring).json()
         if response.get("data"):
             return response["data"]
         else:
             return False
 
     def get_growth_info(self):
-        url = "https://drive-m.quark.cn/1/clouddrive/capacity/growth/info"
-        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        url = f"{self.BASE_URL_APP}/1/clouddrive/capacity/growth/info"
+        querystring = {
+            "pr": "ucpro",
+            "fr": "android",
+            "kps": self.mparam.get("kps"),
+            "sign": self.mparam.get("sign"),
+            "vcode": self.mparam.get("vcode"),
+        }
         headers = {
-            "cookie": self.cookie,
             "content-type": "application/json",
         }
-        response = requests.request(
+        response = self._send_request(
             "GET", url, headers=headers, params=querystring
         ).json()
         if response.get("data"):
@@ -158,16 +472,21 @@ class Quark:
             return False
 
     def get_growth_sign(self):
-        url = "https://drive-m.quark.cn/1/clouddrive/capacity/growth/sign"
-        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        url = f"{self.BASE_URL_APP}/1/clouddrive/capacity/growth/sign"
+        querystring = {
+            "pr": "ucpro",
+            "fr": "android",
+            "kps": self.mparam.get("kps"),
+            "sign": self.mparam.get("sign"),
+            "vcode": self.mparam.get("vcode"),
+        }
         payload = {
             "sign_cyclic": True,
         }
         headers = {
-            "cookie": self.cookie,
             "content-type": "application/json",
         }
-        response = requests.request(
+        response = self._send_request(
             "POST", url, json=payload, headers=headers, params=querystring
         ).json()
         if response.get("data"):
@@ -175,39 +494,23 @@ class Quark:
         else:
             return False, response["message"]
 
-    def get_id_from_url(self, url):
-        url = url.replace("https://pan.quark.cn/s/", "")
-        pattern = r"(\w+)(#/list/share.*/(\w+))?"
-        match = re.search(pattern, url)
-        if match:
-            pwd_id = match.group(1)
-            if match.group(2):
-                pdir_fid = match.group(3)
-            else:
-                pdir_fid = 0
-            return pwd_id, pdir_fid
-        else:
-            return None
-
     # 可验证资源是否失效
-    def get_stoken(self, pwd_id):
-        url = "https://drive-m.quark.cn/1/clouddrive/share/sharepage/token"
-        querystring = {"pr": "ucpro", "fr": "h5"}
-        payload = {"pwd_id": pwd_id, "passcode": ""}
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+    def get_stoken(self, pwd_id, passcode=""):
+        url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/token"
+        querystring = {"pr": "ucpro", "fr": "pc"}
+        payload = {"pwd_id": pwd_id, "passcode": passcode}
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
-        if response.get("data"):
-            return True, response["data"]["stoken"]
-        else:
-            return False, response["message"]
+        return response
 
-    def get_detail(self, pwd_id, stoken, pdir_fid):
-        file_list = []
+    def get_detail(
+        self, pwd_id, stoken, pdir_fid, _fetch_share=0, fetch_share_full_path=0
+    ):
+        list_merge = []
         page = 1
         while True:
-            url = "https://drive-m.quark.cn/1/clouddrive/share/sharepage/detail"
+            url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/detail"
             querystring = {
                 "pr": "ucpro",
                 "fr": "pc",
@@ -218,32 +521,33 @@ class Quark:
                 "_page": page,
                 "_size": "50",
                 "_fetch_banner": "0",
-                "_fetch_share": "0",
+                "_fetch_share": _fetch_share,
                 "_fetch_total": "1",
                 "_sort": "file_type:asc,updated_at:desc",
+                "ver": "2",
+                "fetch_share_full_path": fetch_share_full_path,
             }
-            headers = self.common_headers()
-            response = requests.request(
-                "GET", url, headers=headers, params=querystring
-            ).json()
+            response = self._send_request("GET", url, params=querystring).json()
+            if response["code"] != 0:
+                return response
             if response["data"]["list"]:
-                file_list += response["data"]["list"]
+                list_merge += response["data"]["list"]
                 page += 1
             else:
                 break
-            if len(file_list) >= response["metadata"]["_total"]:
+            if len(list_merge) >= response["metadata"]["_total"]:
                 break
-        return file_list
+        response["data"]["list"] = list_merge
+        return response
 
     def get_fids(self, file_paths):
         fids = []
         while True:
-            url = "https://drive-m.quark.cn/1/clouddrive/file/info/path_list"
+            url = f"{self.BASE_URL}/1/clouddrive/file/info/path_list"
             querystring = {"pr": "ucpro", "fr": "pc"}
             payload = {"file_path": file_paths[:50], "namespace": "0"}
-            headers = self.common_headers()
-            response = requests.request(
-                "POST", url, json=payload, headers=headers, params=querystring
+            response = self._send_request(
+                "POST", url, json=payload, params=querystring
             ).json()
             if response["code"] == 0:
                 fids += response["data"]
@@ -255,11 +559,11 @@ class Quark:
                 break
         return fids
 
-    def ls_dir(self, pdir_fid):
-        file_list = []
+    def ls_dir(self, pdir_fid, **kwargs):
+        list_merge = []
         page = 1
         while True:
-            url = "https://drive-m.quark.cn/1/clouddrive/file/sort"
+            url = f"{self.BASE_URL}/1/clouddrive/file/sort"
             querystring = {
                 "pr": "ucpro",
                 "fr": "pc",
@@ -270,22 +574,25 @@ class Quark:
                 "_fetch_total": "1",
                 "_fetch_sub_dirs": "0",
                 "_sort": "file_type:asc,updated_at:desc",
+                "_fetch_full_path": kwargs.get("fetch_full_path", 0),
+                "fetch_all_file": 1,  # 跟随Web端，作用未知
+                "fetch_risk_file_name": 1,  # 如无此参数，违规文件名会被变 ***
             }
-            headers = self.common_headers()
-            response = requests.request(
-                "GET", url, headers=headers, params=querystring
-            ).json()
+            response = self._send_request("GET", url, params=querystring).json()
+            if response["code"] != 0:
+                return response
             if response["data"]["list"]:
-                file_list += response["data"]["list"]
+                list_merge += response["data"]["list"]
                 page += 1
             else:
                 break
-            if len(file_list) >= response["metadata"]["_total"]:
+            if len(list_merge) >= response["metadata"]["_total"]:
                 break
-        return file_list
+        response["data"]["list"] = list_merge
+        return response
 
     def save_file(self, fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken):
-        url = "https://drive-m.quark.cn/1/clouddrive/share/sharepage/save"
+        url = f"{self.BASE_URL}/1/clouddrive/share/sharepage/save"
         querystring = {
             "pr": "ucpro",
             "fr": "pc",
@@ -294,7 +601,6 @@ class Quark:
             "__dt": int(random.uniform(1, 5) * 60 * 1000),
             "__t": datetime.now().timestamp(),
         }
-        querystring["fr"] = "h5" if self.st else "pc"
         payload = {
             "fid_list": fid_list,
             "fid_token_list": fid_token_list,
@@ -304,14 +610,55 @@ class Quark:
             "pdir_fid": "0",
             "scene": "link",
         }
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
         return response
 
+    def query_task(self, task_id):
+        retry_index = 0
+        while True:
+            url = f"{self.BASE_URL}/1/clouddrive/task"
+            querystring = {
+                "pr": "ucpro",
+                "fr": "pc",
+                "uc_param_str": "",
+                "task_id": task_id,
+                "retry_index": retry_index,
+                "__dt": int(random.uniform(1, 5) * 60 * 1000),
+                "__t": datetime.now().timestamp(),
+            }
+            response = self._send_request("GET", url, params=querystring).json()
+            if response["status"] != 200:
+                return response
+            if response["data"]["status"] == 2:
+                if retry_index > 0:
+                    print()
+                break
+            else:
+                if retry_index == 0:
+                    print(
+                        f"正在等待[{response['data']['task_title']}]执行结果",
+                        end="",
+                        flush=True,
+                    )
+                else:
+                    print(".", end="", flush=True)
+                retry_index += 1
+                time.sleep(0.500)
+        return response
+
+    def download(self, fids):
+        url = f"{self.BASE_URL}/1/clouddrive/file/download"
+        querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
+        payload = {"fids": fids}
+        response = self._send_request("POST", url, json=payload, params=querystring)
+        set_cookie = response.cookies.get_dict()
+        cookie_str = "; ".join([f"{key}={value}" for key, value in set_cookie.items()])
+        return response.json(), cookie_str
+
     def mkdir(self, dir_path):
-        url = "https://drive-m.quark.cn/1/clouddrive/file"
+        url = f"{self.BASE_URL}/1/clouddrive/file"
         querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         payload = {
             "pdir_fid": "0",
@@ -319,34 +666,31 @@ class Quark:
             "dir_path": dir_path,
             "dir_init_lock": False,
         }
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
         return response
 
     def rename(self, fid, file_name):
-        url = "https://drive-m.quark.cn/1/clouddrive/file/rename"
+        url = f"{self.BASE_URL}/1/clouddrive/file/rename"
         querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         payload = {"fid": fid, "file_name": file_name}
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
         return response
 
     def delete(self, filelist):
-        url = "https://drive-m.quark.cn/1/clouddrive/file/delete"
+        url = f"{self.BASE_URL}/1/clouddrive/file/delete"
         querystring = {"pr": "ucpro", "fr": "pc", "uc_param_str": ""}
         payload = {"action_type": 2, "filelist": filelist, "exclude_fids": []}
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
         return response
 
     def recycle_list(self, page=1, size=30):
-        url = "https://drive-m.quark.cn/1/clouddrive/file/recycle/list"
+        url = f"{self.BASE_URL}/1/clouddrive/file/recycle/list"
         querystring = {
             "_page": page,
             "_size": size,
@@ -354,24 +698,71 @@ class Quark:
             "fr": "pc",
             "uc_param_str": "",
         }
-        headers = self.common_headers()
-        response = requests.request(
-            "GET", url, headers=headers, params=querystring
-        ).json()
+        response = self._send_request("GET", url, params=querystring).json()
         return response["data"]["list"]
 
     def recycle_remove(self, record_list):
-        url = "https://drive-m.quark.cn/1/clouddrive/file/recycle/remove"
+        url = f"{self.BASE_URL}/1/clouddrive/file/recycle/remove"
         querystring = {"uc_param_str": "", "fr": "pc", "pr": "ucpro"}
         payload = {
             "select_mode": 2,
             "record_list": record_list,
         }
-        headers = self.common_headers()
-        response = requests.request(
-            "POST", url, json=payload, headers=headers, params=querystring
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
         ).json()
         return response
+
+    def unarchive(self, fid, to_pdir_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/archive/unarchive"
+        querystring = {"uc_param_str": "", "fr": "pc", "pr": "ucpro"}
+        payload = {
+            "fid": fid,
+            "to_pdir_fid": to_pdir_fid,
+            "conflict_mode": 3,
+            "suffix_type": 0,
+            "pwd": "",
+            "select_mode": 0,
+        }
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
+    def move_files(self, fids, to_pdir_fid):
+        url = f"{self.BASE_URL}/1/clouddrive/file/move"
+        querystring = {"uc_param_str": "", "fr": "pc", "pr": "ucpro"}
+        payload = {
+            "filelist": fids,
+            "to_pdir_fid": to_pdir_fid,
+            "exclude_fids": [],
+            "action_type": 1,
+        }
+        response = self._send_request(
+            "POST", url, json=payload, params=querystring
+        ).json()
+        return response
+
+    # ↑ 请求函数
+    # ↓ 操作函数
+
+    def extract_url(self, url):
+        # pwd_id
+        match_id = re.search(r"/s/(\w+)", url)
+        pwd_id = match_id.group(1) if match_id else None
+        # passcode
+        match_pwd = re.search(r"pwd=(\w+)", url)
+        passcode = match_pwd.group(1) if match_pwd else ""
+        # path: fid-name
+        # Legacy 20250905
+        paths = []
+        matches = re.findall(r"/(\w{32})-?([^/]+)?", url)
+        for match in matches:
+            fid = match[0]
+            name = urllib.parse.unquote(match[1]).replace("*101", "-")
+            paths.append({"fid": fid, "name": name})
+        pdir_fid = paths[-1]["fid"] if matches else 0
+        return pwd_id, passcode, pdir_fid, paths
 
     def update_savepath_fid(self, tasklist):
         dir_paths = [
@@ -406,14 +797,12 @@ class Quark:
 
     def do_save_check(self, shareurl, savepath):
         try:
-            pwd_id, pdir_fid = self.get_id_from_url(shareurl)
-            is_sharing, stoken = self.get_stoken(pwd_id)
-            share_file_list = self.get_detail(pwd_id, stoken, pdir_fid)
+            pwd_id, passcode, pdir_fid, _ = self.extract_url(shareurl)
+            stoken = self.get_stoken(pwd_id, passcode)["data"]["stoken"]
+            share_file_list = self.get_detail(pwd_id, stoken, pdir_fid)["data"]["list"]
+            print(f"获取分享: {share_file_list}")
             fid_list = [item["fid"] for item in share_file_list]
             fid_token_list = [item["share_fid_token"] for item in share_file_list]
-            file_name_list = [item["file_name"] for item in share_file_list]
-            if not fid_list:
-                return
             get_fids = self.get_fids([savepath])
             to_pdir_fid = (
                 get_fids[0]["fid"] if get_fids else self.mkdir(savepath)["data"]["fid"]
@@ -421,31 +810,31 @@ class Quark:
             save_file = self.save_file(
                 fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken
             )
-            if save_file["code"] == 41017:
-                return
-            elif save_file["code"] == 0:
-                dir_file_list = self.ls_dir(to_pdir_fid)
-                del_list = [
-                    item["fid"]
-                    for item in dir_file_list
-                    if (item["file_name"] in file_name_list)
-                    and ((datetime.now().timestamp() - item["created_at"]) < 60)
-                ]
-                if del_list:
-                    self.delete(del_list)
-                    recycle_list = self.recycle_list()
-                    record_id_list = [
-                        item["record_id"]
-                        for item in recycle_list
-                        if item["fid"] in del_list
-                    ]
-                    self.recycle_remove(record_id_list)
-                return save_file
-            else:
-                return False
+            print(f"转存文件: {save_file}")
+            if save_file["code"] == 0:
+                task_id = save_file["data"]["task_id"]
+                query_task = self.query_task(task_id)
+                print(f"查询转存: {query_task}")
+                if query_task["code"] == 0:
+                    del_list = query_task["data"]["save_as"]["save_as_top_fids"]
+                    if del_list:
+                        delete_return = self.delete(del_list)
+                        print(f"删除转存: {delete_return}")
+                        recycle_list = self.recycle_list()
+                        record_id_list = [
+                            item["record_id"]
+                            for item in recycle_list
+                            if item["fid"] in del_list
+                        ]
+                        recycle_remove = self.recycle_remove(record_id_list)
+                        print(f"清理转存: {recycle_remove}")
+                        print(f"✅ 转存测试成功")
+                        return True
+            print(f"❌ 转存测试失败: 中断")
+            return False
         except Exception as e:
-            if os.environ.get("DEBUG") == True:
-                print(f"转存测试失败: {str(e)}")
+            print(f"❌ 转存测试失败: {str(e)}")
+            traceback.print_exc()
 
     def do_save_task(self, task):
         # 判断资源失效记录
@@ -454,36 +843,42 @@ class Quark:
             return
 
         # 链接转换所需参数
-        pwd_id, pdir_fid = self.get_id_from_url(task["shareurl"])
-        # print("match: ", pwd_id, pdir_fid)
+        pwd_id, passcode, pdir_fid, _ = self.extract_url(task["shareurl"])
 
         # 获取stoken，同时可验证资源是否失效
-        is_sharing, stoken = self.get_stoken(pwd_id)
-        if not is_sharing:
-            add_notify(f"❌《{task['taskname']}》：{stoken}\n")
-            task["shareurl_ban"] = stoken
+        get_stoken = self.get_stoken(pwd_id, passcode)
+        if get_stoken.get("status") == 200:
+            stoken = get_stoken["data"]["stoken"]
+        elif get_stoken.get("status") == 500:
+            print(f"跳过任务：网络异常 {get_stoken.get('message')}")
+            return
+        else:
+            message = get_stoken.get("message")
+            add_notify(f"❌《{task['taskname']}》：{message}\n")
+            task["shareurl_ban"] = message
             return
         # print("stoken: ", stoken)
 
         updated_tree = self.dir_check_and_save(task, pwd_id, stoken, pdir_fid)
         if updated_tree.size(1) > 0:
+            self.do_rename(updated_tree)
+            print()
             add_notify(f"✅《{task['taskname']}》添加追更：\n{updated_tree}")
-            return True
+            return updated_tree
         else:
             print(f"任务结束：没有新的转存任务")
             return False
 
     def dir_check_and_save(self, task, pwd_id, stoken, pdir_fid="", subdir_path=""):
         tree = Tree()
-        tree.create_node(task["savepath"], pdir_fid)
         # 获取分享文件列表
-        share_file_list = self.get_detail(pwd_id, stoken, pdir_fid)
+        share_file_list = self.get_detail(pwd_id, stoken, pdir_fid)["data"]["list"]
         # print("share_file_list: ", share_file_list)
 
         if not share_file_list:
             if subdir_path == "":
                 task["shareurl_ban"] = "分享为空，文件已被分享者删除"
-                add_notify(f"《{task['taskname']}》：{task['shareurl_ban']}")
+                add_notify(f"❌《{task['taskname']}》：{task['shareurl_ban']}\n")
             return tree
         elif (
             len(share_file_list) == 1
@@ -491,7 +886,9 @@ class Quark:
             and subdir_path == ""
         ):  # 仅有一个文件夹
             print("🧠 该分享是一个文件夹，读取文件夹内列表")
-            share_file_list = self.get_detail(pwd_id, stoken, share_file_list[0]["fid"])
+            share_file_list = self.get_detail(
+                pwd_id, stoken, share_file_list[0]["fid"]
+            )["data"]["list"]
 
         # 获取目标目录文件列表
         savepath = re.sub(r"/{2,}", "/", f"/{task['savepath']}{subdir_path}")
@@ -502,48 +899,90 @@ class Quark:
                 print(f"❌ 目录 {savepath} fid获取失败，跳过转存")
                 return tree
         to_pdir_fid = self.savepath_fid[savepath]
-        dir_file_list = self.ls_dir(to_pdir_fid)
+        dir_file_list = self.ls_dir(to_pdir_fid)["data"]["list"]
+        dir_filename_list = [dir_file["file_name"] for dir_file in dir_file_list]
         # print("dir_file_list: ", dir_file_list)
 
+        tree.create_node(
+            savepath,
+            pdir_fid,
+            data={
+                "is_dir": True,
+            },
+        )
+
+        # 文件命名类
+        mr = MagicRename(CONFIG_DATA.get("magic_regex", {}))
+        mr.set_taskname(task["taskname"])
+
+        # 魔法正则转换
+        pattern, replace = mr.magic_regex_conv(
+            task.get("pattern", ""), task.get("replace", "")
+        )
         # 需保存的文件清单
         need_save_list = []
         # 添加符合的
         for share_file in share_file_list:
-            if share_file["dir"] and task.get("update_subdir", False):
-                pattern, replace = task["update_subdir"], ""
-            else:
-                pattern, replace = magic_regex_func(task["pattern"], task["replace"])
+            search_pattern = (
+                task["update_subdir"]
+                if share_file["dir"] and task.get("update_subdir")
+                else pattern
+            )
             # 正则文件名匹配
-            if re.search(pattern, share_file["file_name"]):
-                # 替换后的文件名
-                save_name = (
-                    re.sub(pattern, replace, share_file["file_name"])
-                    if replace != ""
-                    else share_file["file_name"]
-                )
-                # 忽略后缀
-                if task.get("ignore_extension") and not share_file["dir"]:
-                    compare_func = lambda a, b1, b2: (
-                        os.path.splitext(a)[0] == os.path.splitext(b1)[0]
-                        or os.path.splitext(a)[0] == os.path.splitext(b2)[0]
-                    )
-                else:
-                    compare_func = lambda a, b1, b2: (a == b1 or a == b2)
-                # 判断目标目录文件是否存在
-                file_exists = any(
-                    compare_func(
-                        dir_file["file_name"], share_file["file_name"], save_name
-                    )
-                    for dir_file in dir_file_list
-                )
-                if not file_exists:
-                    share_file["save_name"] = save_name
-                    need_save_list.append(share_file)
+            if re.search(search_pattern, share_file["file_name"]):
+                # 判断原文件名是否存在，处理忽略扩展名
+                if not mr.is_exists(
+                    share_file["file_name"],
+                    dir_filename_list,
+                    (task.get("ignore_extension") and not share_file["dir"]),
+                ):
+                    # 文件夹、子目录文件不进行重命名
+                    if share_file["dir"] or subdir_path:
+                        share_file["file_name_re"] = share_file["file_name"]
+                        need_save_list.append(share_file)
+                    else:
+                        # 替换后的文件名
+                        file_name_re = mr.sub(pattern, replace, share_file["file_name"])
+                        # 判断替换后的文件名是否存在
+                        if not mr.is_exists(
+                            file_name_re,
+                            dir_filename_list,
+                            task.get("ignore_extension"),
+                        ):
+                            share_file["file_name_re"] = file_name_re
+                            need_save_list.append(share_file)
                 elif share_file["dir"]:
-                    # 存在并是一个文件夹
-                    if task.get("update_subdir", False):
-                        if re.search(task["update_subdir"], share_file["file_name"]):
-                            print(f"检查子文件夹：{savepath}/{share_file['file_name']}")
+                    # 存在并是一个目录，历遍子目录
+                    if task.get("update_subdir", False) and re.search(
+                        task["update_subdir"], share_file["file_name"]
+                    ):
+                        if task.get("update_subdir_resave_mode", False):
+                            # 重存模式：删除该目录下所有文件，重新转存
+                            print(f"重存子目录：{savepath}/{share_file['file_name']}")
+                            # 删除子目录、回收站中彻底删除
+                            subdir = next(
+                                (
+                                    f
+                                    for f in dir_file_list
+                                    if f["file_name"] == share_file["file_name"]
+                                ),
+                                None,
+                            )
+                            delete_return = self.delete([subdir["fid"]])
+                            self.query_task(delete_return["data"]["task_id"])
+                            recycle_list = self.recycle_list()
+                            record_id_list = [
+                                item["record_id"]
+                                for item in recycle_list
+                                if item["fid"] == subdir["fid"]
+                            ]
+                            self.recycle_remove(record_id_list)
+                            # 作为新文件添加到转存列表
+                            share_file["file_name_re"] = share_file["file_name"]
+                            need_save_list.append(share_file)
+                        else:
+                            # 递归模式
+                            print(f"检查子目录：{savepath}/{share_file['file_name']}")
                             subdir_tree = self.dir_check_and_save(
                                 task,
                                 pwd_id,
@@ -557,213 +996,147 @@ class Quark:
                                     "📁" + share_file["file_name"],
                                     share_file["fid"],
                                     parent=pdir_fid,
+                                    data={
+                                        "is_dir": share_file["dir"],
+                                    },
                                 )
                                 tree.merge(share_file["fid"], subdir_tree, deep=False)
+            # 指定文件开始订阅/到达指定文件（含）结束历遍
+            if share_file["fid"] == task.get("startfid", ""):
+                break
 
+        if re.search(r"\{I+\}", replace):
+            mr.set_dir_file_list(dir_file_list, replace)
+            mr.sort_file_list(need_save_list)
+
+        # 转存文件
         fid_list = [item["fid"] for item in need_save_list]
         fid_token_list = [item["share_fid_token"] for item in need_save_list]
-        save_name_list = [item["save_name"] for item in need_save_list]
         if fid_list:
-            save_file_return = self.save_file(
-                fid_list, fid_token_list, to_pdir_fid, pwd_id, stoken
-            )
             err_msg = None
-            if save_file_return["code"] == 0:
-                task_id = save_file_return["data"]["task_id"]
-                query_task_return = self.query_task(task_id)
-                if query_task_return["code"] == 0:
-                    save_name_list.sort()
-                    # 建立目录树
-                    for item in need_save_list:
-                        icon = (
-                            "📁"
-                            if item["dir"] == True
-                            else "🎞️" if item["obj_category"] == "video" else ""
+            save_as_top_fids = []
+            while fid_list:
+                # 分次转存，100个/次，因query_task返回save_as_top_fids最多100
+                save_file_return = self.save_file(
+                    fid_list[:100], fid_token_list[:100], to_pdir_fid, pwd_id, stoken
+                )
+                fid_list = fid_list[100:]
+                fid_token_list = fid_token_list[100:]
+                if save_file_return["code"] == 0:
+                    # 转存成功，查询转存结果
+                    task_id = save_file_return["data"]["task_id"]
+                    query_task_return = self.query_task(task_id)
+                    if query_task_return["code"] == 0:
+                        save_as_top_fids.extend(
+                            query_task_return["data"]["save_as"]["save_as_top_fids"]
                         )
-                        tree.create_node(
-                            f"{icon}{item['save_name']}", item["fid"], parent=pdir_fid
-                        )
+                    else:
+                        err_msg = query_task_return["message"]
                 else:
-                    err_msg = query_task_return["message"]
-            else:
-                err_msg = save_file_return["message"]
-            if err_msg:
-                add_notify(f"❌《{task['taskname']}》转存失败：{err_msg}\n")
+                    err_msg = save_file_return["message"]
+                if err_msg:
+                    add_notify(f"❌《{task['taskname']}》转存失败：{err_msg}\n")
+            # 建立目录树
+            if len(need_save_list) == len(save_as_top_fids):
+                for index, item in enumerate(need_save_list):
+                    icon = self._get_file_icon(item)
+                    tree.create_node(
+                        f"{icon}{item['file_name_re']}",
+                        item["fid"],
+                        parent=pdir_fid,
+                        data={
+                            "file_name": item["file_name"],
+                            "file_name_re": item["file_name_re"],
+                            "fid": f"{save_as_top_fids[index]}",
+                            "path": f"{savepath}/{item['file_name_re']}",
+                            "is_dir": item["dir"],
+                            "obj_category": item.get("obj_category", ""),
+                        },
+                    )
         return tree
 
-    def query_task(self, task_id):
-        retry_index = 0
-        while True:
-            url = "https://drive-m.quark.cn/1/clouddrive/task"
-            querystring = {
-                "pr": "ucpro",
-                "fr": "pc",
-                "uc_param_str": "",
-                "task_id": task_id,
-                "retry_index": retry_index,
-                "__dt": int(random.uniform(1, 5) * 60 * 1000),
-                "__t": datetime.now().timestamp(),
-            }
-            headers = self.common_headers()
-            response = requests.request(
-                "GET", url, headers=headers, params=querystring
-            ).json()
-            if response["data"]["status"] != 0:
-                if retry_index > 0:
-                    print()
-                break
-            else:
-                if retry_index == 0:
-                    print(
-                        f"正在等待[{response['data']['task_title']}]执行结果",
-                        end="",
-                        flush=True,
-                    )
-                else:
-                    print(".", end="", flush=True)
-                retry_index += 1
-                time.sleep(0.500)
-        return response
+    def do_rename(self, tree, node_id=None):
+        if node_id is None:
+            node_id = tree.root
+        for child in tree.children(node_id):
+            file = child.data
+            if file.get("is_dir"):
+                # self.do_rename(tree, child.identifier)
+                pass
+            elif file.get("file_name_re") and file["file_name_re"] != file["file_name"]:
+                rename_ret = self.rename(file["fid"], file["file_name_re"])
+                print(f"重命名：{file['file_name']} → {file['file_name_re']}")
+                if rename_ret["code"] != 0:
+                    print(f"      ↑ 失败，{rename_ret['message']}")
 
-    def do_rename_task(self, task, subdir_path=""):
-        if not task["pattern"] or not task["replace"]:
-            return 0
-        savepath = re.sub(r"/{2,}", "/", f"/{task['savepath']}{subdir_path}")
-        if not self.savepath_fid.get(savepath):
-            self.savepath_fid[savepath] = self.get_fids([savepath])[0]["fid"]
-        dir_file_list = self.ls_dir(self.savepath_fid[savepath])
-        dir_file_name_list = [item["file_name"] for item in dir_file_list]
-        is_rename_count = 0
-        for dir_file in dir_file_list:
-            if dir_file["dir"]:
-                is_rename_count += self.do_rename_task(
-                    task, f"{subdir_path}/{dir_file['file_name']}"
-                )
-            pattern, replace = magic_regex_func(task["pattern"], task["replace"])
-            if re.search(pattern, dir_file["file_name"]):
-                save_name = (
-                    re.sub(pattern, replace, dir_file["file_name"])
-                    if replace != ""
-                    else dir_file["file_name"]
-                )
-                if save_name != dir_file["file_name"] and (
-                    save_name not in dir_file_name_list
-                ):
-                    rename_return = self.rename(dir_file["fid"], save_name)
-                    if rename_return["code"] == 0:
-                        print(f"重命名：{dir_file['file_name']} → {save_name}")
-                        is_rename_count += 1
-                    else:
-                        print(
-                            f"重命名：{dir_file['file_name']} → {save_name} 失败，{rename_return['message']}"
-                        )
-        return is_rename_count > 0
-
-
-class Emby:
-    def __init__(self, emby_url, emby_apikey):
-        self.is_active = False
-        if emby_url and emby_apikey:
-            self.emby_url = emby_url
-            self.emby_apikey = emby_apikey
-            if self.get_info():
-                self.is_active = True
-
-    def get_info(self):
-        url = f"{self.emby_url}/emby/System/Info"
-        headers = {"X-Emby-Token": self.emby_apikey}
-        querystring = {}
-        response = requests.request("GET", url, headers=headers, params=querystring)
-        if "application/json" in response.headers["Content-Type"]:
-            response = response.json()
-            print(
-                f"Emby媒体库: {response.get('ServerName','')} v{response.get('Version','')}"
-            )
-            return True
-        else:
-            print(f"Emby媒体库: 连接失败❌ {response.text}")
-            return False
-
-    def refresh(self, emby_id):
-        if emby_id:
-            url = f"{self.emby_url}/emby/Items/{emby_id}/Refresh"
-            headers = {"X-Emby-Token": self.emby_apikey}
-            querystring = {
-                "Recursive": "true",
-                "MetadataRefreshMode": "FullRefresh",
-                "ImageRefreshMode": "FullRefresh",
-                "ReplaceAllMetadata": "false",
-                "ReplaceAllImages": "false",
-            }
-            response = requests.request(
-                "POST", url, headers=headers, params=querystring
-            )
-            if response.text == "":
-                print(f"🎞 刷新Emby媒体库：成功✅")
-                return True
-            else:
-                print(f"🎞 刷新Emby媒体库：{response.text}❌")
-                return False
-
-    def search(self, media_name):
-        if media_name:
-            url = f"{self.emby_url}/emby/Items"
-            headers = {"X-Emby-Token": self.emby_apikey}
-            querystring = {
-                "IncludeItemTypes": "Series",
-                "StartIndex": 0,
-                "SortBy": "SortName",
-                "SortOrder": "Ascending",
-                "ImageTypeLimit": 0,
-                "Recursive": "true",
-                "SearchTerm": media_name,
-                "Limit": 10,
-                "IncludeSearchTypes": "false",
-            }
-            response = requests.request("GET", url, headers=headers, params=querystring)
-            if "application/json" in response.headers["Content-Type"]:
-                response = response.json()
-                if response.get("Items"):
-                    for item in response["Items"]:
-                        if item["IsFolder"]:
-                            print(
-                                f"🎞 《{item['Name']}》匹配到Emby媒体库ID：{item['Id']}"
-                            )
-                            return item["Id"]
-            else:
-                print(f"🎞 搜索Emby媒体库：{response.text}❌")
-        return False
+    def _get_file_icon(self, f):
+        if f.get("dir"):
+            return "📁"
+        ico_maps = {
+            "video": "🎞️",
+            "image": "🖼️",
+            "audio": "🎵",
+            "doc": "📄",
+            "archive": "📦",
+            "default": "",
+        }
+        return ico_maps.get(f.get("obj_category"), "")
 
 
 def verify_account(account):
     # 验证账号
-    account_info = account.init()
     print(f"▶️ 验证第{account.index}个账号")
-    if not account_info:
-        add_notify(f"👤 第{account.index}个账号登录失败，cookie无效❌")
+    if "__uid" not in account.cookie:
+        print(f"💡 不存在cookie必要参数，判断为仅签到")
         return False
     else:
-        print(f"👤 账号昵称: {account_info['nickname']}✅")
-        return True
+        account_info = account.init()
+        if not account_info:
+            add_notify(f"👤 第{account.index}个账号登录失败，cookie无效❌")
+            return False
+        else:
+            print(f"👤 账号昵称: {account_info['nickname']}✅")
+            return True
+
+
+def format_bytes(size_bytes: int) -> str:
+    units = ("B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB")
+    i = 0
+    while size_bytes >= 1024 and i < len(units) - 1:
+        size_bytes /= 1024
+        i += 1
+    return f"{size_bytes:.2f} {units[i]}"
 
 
 def do_sign(account):
-    if not verify_account(account):
+    if not account.mparam:
+        print("⏭️ 移动端参数未设置，跳过签到")
         print()
         return
     # 每日领空间
     growth_info = account.get_growth_info()
     if growth_info:
+        VIP_MAP = {
+            "NORMAL": "普通用户",
+            "EXP_SVIP": "88VIP",
+            "SUPER_VIP": "SVIP",
+            "Z_VIP": "SVIP+",
+        }
+        growth_message = f"💾 {VIP_MAP.get(growth_info['member_type'], growth_info['member_type'])} 总空间：{format_bytes(growth_info['total_capacity'])}，签到累计获得：{format_bytes(growth_info['cap_composition'].get('sign_reward', 0))}"
         if growth_info["cap_sign"]["sign_daily"]:
-            print(
-                f"📅 执行签到: 今日已签到+{int(growth_info['cap_sign']['sign_daily_reward']/1024/1024)}MB，连签进度({growth_info['cap_sign']['sign_progress']}/{growth_info['cap_sign']['sign_target']})✅"
-            )
+            sign_message = f"📅 签到记录: 今日已签到+{int(growth_info['cap_sign']['sign_daily_reward']/1024/1024)}MB，连签进度({growth_info['cap_sign']['sign_progress']}/{growth_info['cap_sign']['sign_target']})✅"
+            message = f"{sign_message}\n{growth_message}"
+            print(message)
         else:
             sign, sign_return = account.get_growth_sign()
             if sign:
-                message = f"📅 执行签到: 今日签到+{int(sign_return/1024/1024)}MB，连签进度({growth_info['cap_sign']['sign_progress']+1}/{growth_info['cap_sign']['sign_target']})✅"
+                sign_message = f"📅 执行签到: 今日签到+{int(sign_return/1024/1024)}MB，连签进度({growth_info['cap_sign']['sign_progress']+1}/{growth_info['cap_sign']['sign_target']})✅"
+                message = f"{sign_message}\n{growth_message}"
                 if (
-                    CONFIG_DATA.get("push_config", {}).get("QUARK_SIGN_NOTIFY") == False
+                    str(
+                        CONFIG_DATA.get("push_config", {}).get("QUARK_SIGN_NOTIFY")
+                    ).lower()
+                    == "false"
                     or os.environ.get("QUARK_SIGN_NOTIFY") == "false"
                 ):
                     print(message)
@@ -771,20 +1144,23 @@ def do_sign(account):
                     message = message.replace("今日", f"[{account.nickname}]今日")
                     add_notify(message)
             else:
-                print(f"📅 执行签到: {sign_return}")
+                print(f"📅 签到异常: {sign_return}")
+    else:
+        print("⏭️ 签到进度读取异常，可能登录失效，跳过签到")
     print()
 
 
 def do_save(account, tasklist=[]):
-    emby = Emby(
-        CONFIG_DATA.get("emby", {}).get("url", ""),
-        CONFIG_DATA.get("emby", {}).get("apikey", ""),
+    print(f"🧩 载入插件")
+    plugins, CONFIG_DATA["plugins"], task_plugins_config = Config.load_plugins(
+        CONFIG_DATA.get("plugins", {})
     )
+    print()
     print(f"转存账号: {account.nickname}")
     # 获取全部保存目录fid
     account.update_savepath_fid(tasklist)
 
-    def check_date(task):
+    def is_time(task):
         return (
             not task.get("enddate")
             or (
@@ -792,42 +1168,75 @@ def do_save(account, tasklist=[]):
                 <= datetime.strptime(task["enddate"], "%Y-%m-%d").date()
             )
         ) and (
-            not task.get("runweek")
+            "runweek" not in task
             # 星期一为0，星期日为6
             or (datetime.today().weekday() + 1 in task.get("runweek"))
         )
 
+    for plugin_name, plugin in plugins.items():
+        if plugin.is_active and hasattr(plugin, "task_before"):
+            tasklist = (
+                plugin.task_before(tasklist=tasklist, account=account) or tasklist
+            )
+
     # 执行任务
     for index, task in enumerate(tasklist):
-        # 判断任务期限
-        if check_date(task):
-            print()
-            print(f"#{index+1}------------------")
-            print(f"任务名称: {task['taskname']}")
-            print(f"分享链接: {task['shareurl']}")
-            print(f"目标目录: {task['savepath']}")
+        print()
+        print(f"#{index+1}------------------")
+        print(f"任务名称: {task['taskname']}")
+        print(f"分享链接: {task['shareurl']}")
+        print(f"保存路径: {task['savepath']}")
+        if task.get("pattern"):
             print(f"正则匹配: {task['pattern']}")
+        if task.get("replace"):
             print(f"正则替换: {task['replace']}")
-            if task.get("enddate"):
-                print(f"任务截止: {task['enddate']}")
-            if task.get("emby_id"):
-                print(f"刷媒体库: {task['emby_id']}")
-            if task.get("ignore_extension"):
-                print(f"忽略后缀: {task['ignore_extension']}")
-            if task.get("update_subdir"):
-                print(f"更子目录: {task['update_subdir']}")
-            print()
-            is_new = account.do_save_task(task)
-            is_rename = account.do_rename_task(task)
-            # 刷新媒体库
-            if emby.is_active and (is_new or is_rename) and task.get("emby_id") != "0":
-                if task.get("emby_id"):
-                    emby.refresh(task["emby_id"])
-                else:
-                    match_emby_id = emby.search(task["taskname"])
-                    if match_emby_id:
-                        task["emby_id"] = match_emby_id
-                        emby.refresh(match_emby_id)
+        if task.get("update_subdir"):
+            print(f"更子目录: {task['update_subdir']}")
+        if task.get("runweek") or task.get("enddate"):
+            print(
+                f"运行周期: WK{task.get('runweek',[])} ~ {task.get('enddate','forever')}"
+            )
+        print()
+        # 判断任务周期
+        if not is_time(task):
+            print(f"任务不在运行周期内，跳过")
+        else:
+            is_new_tree = account.do_save_task(task)
+
+            # 补充任务的插件配置
+            def merge_dicts(a, b):
+                result = a.copy()
+                for key, value in b.items():
+                    if (
+                        key in result
+                        and isinstance(result[key], dict)
+                        and isinstance(value, dict)
+                    ):
+                        result[key] = merge_dicts(result[key], value)
+                    elif key not in result:
+                        result[key] = value
+                return result
+
+            task["addition"] = merge_dicts(
+                task.get("addition", {}), task_plugins_config
+            )
+            # 调用插件
+            if is_new_tree:
+                print(f"🧩 调用插件")
+                for plugin_name, plugin in plugins.items():
+                    if plugin.is_active and hasattr(plugin, "run"):
+                        task = (
+                            plugin.run(task, account=account, tree=is_new_tree) or task
+                        )
+    print()
+    print(f"===============插件收尾===============")
+    for plugin_name, plugin in plugins.items():
+        if plugin.is_active and hasattr(plugin, "task_after"):
+            data = plugin.task_after(tasklist=tasklist, account=account)
+            if data.get("tasklist"):
+                CONFIG_DATA["tasklist"] = data["tasklist"]
+            if data.get("config"):
+                CONFIG_DATA["plugins"][plugin_name] = data["config"]
     print()
 
 
@@ -839,7 +1248,28 @@ def main():
     print()
     # 读取启动参数
     config_path = sys.argv[1] if len(sys.argv) > 1 else "quark_config.json"
-    task_index = int(sys.argv[2]) if len(sys.argv) > 2 and sys.argv[2].isdigit() else ""
+    # 推送测试
+    if os.environ.get("QUARK_TEST", "").lower() == "true":
+        print(f"===============通知测试===============")
+        CONFIG_DATA["push_config"] = json.loads(os.environ.get("PUSH_CONFIG"))
+        send_ql_notify(
+            "【夸克自动转存】",
+            f"通知测试\n\n{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        )
+        print()
+        if cookies := json.loads(os.environ.get("COOKIE", "[]")):
+            print(f"===============转存测试===============")
+            accounts = Quark(cookies[0])
+            accounts.do_save_check("https://pan.quark.cn/s/1ed94d530d63", "/来自：分享")
+            print()
+        return
+    # 从环境变量中获取 TASKLIST
+    tasklist_from_env = []
+    if tasklist_json := os.environ.get("TASKLIST"):
+        try:
+            tasklist_from_env = json.loads(tasklist_json)
+        except Exception as e:
+            print(f"从环境变量解析任务列表失败 {e}")
     # 检查本地文件是否存在，如果不存在就下载
     if not os.path.exists(config_path):
         if os.environ.get("QUARK_COOKIE"):
@@ -851,51 +1281,48 @@ def main():
         else:
             print(f"⚙️ 配置文件 {config_path} 不存在❌，正远程从下载配置模版")
             config_url = f"{GH_PROXY}https://raw.githubusercontent.com/Cp0204/quark_auto_save/main/quark_config.json"
-            if download_file(config_url, config_path):
+            if Config.download_file(config_url, config_path):
                 print("⚙️ 配置模版下载成功✅，请到程序目录中手动配置")
             return
     else:
         print(f"⚙️ 正从 {config_path} 文件中读取配置")
-        with open(config_path, "r", encoding="utf-8") as file:
-            CONFIG_DATA = json.load(file)
+        CONFIG_DATA = Config.read_json(config_path)
+        Config.breaking_change_update(CONFIG_DATA)
         cookie_val = CONFIG_DATA.get("cookie")
-        if not CONFIG_DATA.get("magic_regex"):
-            CONFIG_DATA["magic_regex"] = MAGIC_REGEX
         cookie_form_file = True
     # 获取cookie
-    cookies = get_cookies(cookie_val)
+    cookies = Config.get_cookies(cookie_val)
     if not cookies:
         print("❌ cookie 未配置")
         return
     accounts = [Quark(cookie, index) for index, cookie in enumerate(cookies)]
     # 签到
     print(f"===============签到任务===============")
-    if type(task_index) is int:
-        do_sign(accounts[0])
+    if tasklist_from_env:
+        verify_account(accounts[0])
     else:
         for account in accounts:
+            verify_account(account)
             do_sign(account)
     print()
     # 转存
     if accounts[0].is_active and cookie_form_file:
         print(f"===============转存任务===============")
         # 任务列表
-        tasklist = CONFIG_DATA.get("tasklist", [])
-        if type(task_index) is int:
-            do_save(accounts[0], [tasklist[task_index]])
+        if tasklist_from_env:
+            do_save(accounts[0], tasklist_from_env)
         else:
-            do_save(accounts[0], tasklist)
+            do_save(accounts[0], CONFIG_DATA.get("tasklist", []))
         print()
     # 通知
     if NOTIFYS:
         notify_body = "\n".join(NOTIFYS)
         print(f"===============推送通知===============")
-        send_ql_notify("【夸克自动追更】", notify_body)
+        send_ql_notify("【夸克自动转存】", notify_body)
         print()
     if cookie_form_file:
         # 更新配置
-        with open(config_path, "w", encoding="utf-8") as file:
-            json.dump(CONFIG_DATA, file, ensure_ascii=False, indent=2)
+        Config.write_json(config_path, CONFIG_DATA)
 
     print(f"===============程序结束===============")
     duration = datetime.now() - start_time
